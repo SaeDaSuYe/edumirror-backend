@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+
+# Environment variables
+.env
+
+# Database
+database/*.db
+database/*.db-*
+
+# Uploads
+uploads/presentations/*
+uploads/recordings/*
+!uploads/presentations/.gitkeep
+!uploads/recordings/.gitkeep
+
+# Analysis results
+analysis/*
+!analysis/.gitkeep
+
+# Logs
+logs/*
+!logs/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+*.swp
+*.swo
+
+# Runtime
+*.pid
+*.seed
+*.log
+/src/generated/prisma
