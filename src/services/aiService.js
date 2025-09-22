@@ -1,97 +1,216 @@
 const OpenAI = require("openai");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+const FormData = require("form-data");
+const fs = require("fs");
+const path = require("path");
 
+// API 클라이언트 초기화
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-const analyzeScript = async (scriptText) => {
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const geminiModel = genAI.getGenerativeModel({ model: "gemini-pro" });
+
+// Whisper를 사용한 음성 텍스트 변환
+const transcribeAudio = async (audioFilePath) => {
   try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        {
-          role: "user",
-          content: `다음 발표 대본을 분석해주세요:
-                
-                대본: "${scriptText}"
-                
-                다음 형식으로 JSON 응답해주세요:
-                {
-                    "word_count": 단어수,
-                    "estimated_duration": 예상시간(초),
-                    "key_topics": ["주요", "키워드", "배열"]
-                }`,
-        },
-      ],
-      temperature: 0.3,
+    console.log(`Starting transcription for: ${audioFilePath}`);
+
+    const transcription = await openai.audio.transcriptions.create({
+      file: fs.createReadStream(audioFilePath),
+      model: "whisper-1",
+      language: "ko", // 한국어 지정
+      response_format: "verbose_json", // 타임스탬프 포함
+      timestamp_granularities: ["word"], // 단어별 타임스탬프
     });
 
-    const content = response.choices[0].message.content;
-    return JSON.parse(content);
+    return {
+      text: transcription.text,
+      words: transcription.words || [],
+      duration: transcription.duration,
+      language: transcription.language,
+    };
+  } catch (error) {
+    console.error("Whisper transcription failed:", error);
+    throw new Error("음성 텍스트 변환에 실패했습니다");
+  }
+};
+
+// Gemini를 사용한 종합 분석
+const analyzePresentation = async (analysisData) => {
+  try {
+    const {
+      scriptText, // 원본 발표 대본
+      transcribedText, // Whisper로 변환된 음성 텍스트
+      sessionMetadata, // 발표 메타데이터
+      realtimeMetrics, // 실시간 수집된 데이터
+    } = analysisData;
+
+    const prompt = `
+당신은 발표 분석 전문가입니다. 다음 데이터를 종합적으로 분석하여 발표를 평가해주세요.
+
+## 분석 데이터
+
+### 1. 원본 발표 대본
+${scriptText || "대본 없음"}
+
+### 2. 실제 발표 음성 (텍스트 변환)
+${transcribedText || "음성 데이터 없음"}
+
+### 3. 발표 메타데이터
+- 제목: ${sessionMetadata.title}
+- 테마: ${sessionMetadata.theme}
+- 예상 시간: ${sessionMetadata.expectedDuration}초
+- 실제 시간: ${sessionMetadata.actualDuration}초
+
+### 4. 실시간 측정 데이터
+- 평균 음량: ${realtimeMetrics.avgVolume || "N/A"}
+- 발화 속도: ${realtimeMetrics.avgSpeakingPace || "N/A"} WPM
+- 시선 처리: 청중 ${realtimeMetrics.audienceContactRatio || 0}%
+- 슬라이드 전환: ${realtimeMetrics.pageTransitions || 0}회
+
+## 평가 요청
+
+다음 JSON 형식으로 정확히 응답해주세요:
+
+{
+    "overall_score": 85,
+    "detailed_scores": {
+        "expression": 80,
+        "comprehension": 90,
+        "delivery": 85,
+        "engagement": 82
+    },
+    "speech_analysis": {
+        "script_adherence": 0.89,
+        "improvisation_quality": "good",
+        "key_points_covered": ["주요포인트1", "주요포인트2"],
+        "missing_elements": ["빠진내용"],
+        "filler_words_count": 5,
+        "speaking_pace_evaluation": "적절함"
+    },
+    "content_analysis": {
+        "clarity": "명확한 구조와 논리적 흐름",
+        "depth": "주제에 대한 깊이 있는 이해",
+        "relevance": "주제와 내용의 일치도 높음"
+    },
+    "delivery_analysis": {
+        "voice_quality": "안정적인 음성",
+        "timing": "적절한 속도와 멈춤",
+        "engagement": "청중과의 소통 시도"
+    },
+    "suggestions": [
+        {
+            "category": "delivery",
+            "priority": "high", 
+            "description": "구체적인 개선사항",
+            "recommendation": "실행 가능한 조언"
+        }
+    ]
+}
+`;
+
+    const result = await geminiModel.generateContent(prompt);
+    const response = await result.response;
+    const analysisText = response.text();
+
+    // JSON 파싱
+    const jsonMatch = analysisText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error("Gemini 응답에서 JSON을 찾을 수 없습니다");
+    }
+
+    return JSON.parse(jsonMatch[0]);
+  } catch (error) {
+    console.error("Gemini analysis failed:", error);
+
+    // 폴백 분석 결과
+    return {
+      overall_score: 75,
+      detailed_scores: {
+        expression: 70,
+        comprehension: 80,
+        delivery: 75,
+        engagement: 70,
+      },
+      speech_analysis: {
+        script_adherence: 0.8,
+        improvisation_quality: "분석 실패",
+        key_points_covered: [],
+        missing_elements: [],
+        filler_words_count: 0,
+        speaking_pace_evaluation: "분석 불가",
+      },
+      content_analysis: {
+        clarity: "분석 실패",
+        depth: "분석 실패",
+        relevance: "분석 실패",
+      },
+      delivery_analysis: {
+        voice_quality: "분석 실패",
+        timing: "분석 실패",
+        engagement: "분석 실패",
+      },
+      suggestions: [
+        {
+          category: "system",
+          priority: "low",
+          description: "AI 분석에 실패했습니다",
+          recommendation: "다시 시도해보세요",
+        },
+      ],
+    };
+  }
+};
+
+// 대본 분석 (기존 유지, Gemini 사용)
+const analyzeScript = async (scriptText) => {
+  try {
+    const prompt = `다음 발표 대본을 분석해주세요:
+
+"${scriptText}"
+
+다음 JSON 형식으로 응답해주세요:
+{
+    "word_count": 단어수,
+    "estimated_duration": 예상시간(초),
+    "key_topics": ["주요", "키워드", "배열"],
+    "structure_analysis": "구조 분석",
+    "suggestions": ["개선사항1", "개선사항2"]
+}`;
+
+    const result = await geminiModel.generateContent(prompt);
+    const response = await result.response;
+    const analysisText = response.text();
+
+    const jsonMatch = analysisText.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+
+    // 폴백
+    return {
+      word_count: scriptText.split(" ").length,
+      estimated_duration: Math.ceil(scriptText.split(" ").length * 0.5),
+      key_topics: [],
+      structure_analysis: "분석 실패",
+      suggestions: [],
+    };
   } catch (error) {
     console.error("Script analysis failed:", error);
     return {
       word_count: scriptText.split(" ").length,
       estimated_duration: Math.ceil(scriptText.split(" ").length * 0.5),
       key_topics: [],
+      structure_analysis: "분석 실패",
+      suggestions: [],
     };
   }
 };
 
-const generateQuestions = async (
-  keywords,
-  difficultyLevel = "high_school",
-  count = 3
-) => {
-  try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        {
-          role: "user",
-          content: `다음 키워드들을 바탕으로 ${difficultyLevel} 수준의 질문 ${count}개를 생성해주세요:
-                
-                키워드: ${keywords.join(", ")}
-                
-                다음 형식으로 JSON 응답해주세요:
-                {
-                    "questions": [
-                        {
-                            "question_id": "q1",
-                            "text": "질문 내용",
-                            "difficulty": "medium",
-                            "expected_answer_duration": 60
-                        }
-                    ]
-                }`,
-        },
-      ],
-      temperature: 0.7,
-    });
-
-    const content = response.choices[0].message.content;
-    return JSON.parse(content);
-  } catch (error) {
-    console.error("Question generation failed:", error);
-    return { questions: [] };
-  }
-};
-
-const analyzePresentation = async (sessionData) => {
-  // 종합 분석 로직 (추후 구현)
-  return {
-    overall_score: 85,
-    detailed_scores: {
-      expression: 80,
-      comprehension: 90,
-      delivery: 85,
-      engagement: 82,
-    },
-  };
-};
-
 module.exports = {
-  analyzeScript,
-  generateQuestions,
+  transcribeAudio,
   analyzePresentation,
+  analyzeScript,
 };

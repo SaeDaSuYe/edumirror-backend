@@ -41,6 +41,8 @@ model Session {
   user           User            @relation(fields: [userId], references: [id])
   analysisResult AnalysisResult?
   aiQuestions    AiQuestion[]
+  audioData       AudioData[]
+  realtimeMetrics RealtimeMetric[]
 
   @@map("sessions")
 }
@@ -72,4 +74,30 @@ model AiQuestion {
   session Session @relation(fields: [sessionId], references: [id])
 
   @@map("ai_questions")
+}
+
+model AudioData {
+  id            Int       @id @default(autoincrement())
+  sessionId     String    @map("session_id")
+  filePath      String    @map("file_path")
+  transcription String?   // Whisper 결과
+  duration      Float?
+  createdAt     DateTime  @default(now()) @map("created_at")
+  
+  session       Session   @relation(fields: [sessionId], references: [id])
+  
+  @@map("audio_data")
+}
+
+model RealtimeMetric {
+  id          Int       @id @default(autoincrement())
+  sessionId   String    @map("session_id")
+  metricType  String    @map("metric_type") // audio, gaze, gesture
+  data        String    // JSON 형태
+  timestamp   Float
+  createdAt   DateTime  @default(now()) @map("created_at")
+  
+  session     Session   @relation(fields: [sessionId], references: [id])
+  
+  @@map("realtime_metrics")
 }
